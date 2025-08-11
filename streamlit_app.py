@@ -105,7 +105,7 @@ ORDER BY total_claims DESC;
 """,
 
     "Query 10 — Provider with highest number of completed claims (top 1)": """
-SELECT p.Name AS Provider_Name,
+SELECT p.Name AS Name,
        COUNT(c.Claim_ID) AS successful_claims
 FROM claims c
 JOIN food_listings f ON c.Food_ID = f.Food_ID
@@ -316,3 +316,4 @@ else:
 
 st.markdown("---")
 st.caption("Built with ❤️ — Local Food Wastage Management System")
+
