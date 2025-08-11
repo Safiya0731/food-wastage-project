@@ -1,319 +1,176 @@
-# streamlit_app.py
-import sqlite3
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import sqlite3
 import plotly.express as px
 
-st.set_page_config(page_title="Food Wastage Dashboard", layout="wide")
-st.title("🍽️ Local Food Wastage Management System")
+# Database connection
+conn = sqlite3.connect("food_wastage.db")
 
-# ---------------------------
-# Cached DB connection
-# ---------------------------
-@st.cache_data
-def get_conn(db_path: str = "food_wastage.db"):
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    return conn
+# -------------------------------
+# Load data into SQLite tables
+# -------------------------------
+providers_df = pd.read_csv("providers_data.csv")
+receivers_df = pd.read_csv("receivers_data.csv")
+food_listings_df = pd.read_csv("food_listings_data.csv")
+claims_df = pd.read_csv("claims_data.csv")
 
-conn = get_conn()
+providers_df.to_sql("providers", conn, if_exists="replace", index=False)
+receivers_df.to_sql("receivers", conn, if_exists="replace", index=False)
+food_listings_df.to_sql("food_listings", conn, if_exists="replace", index=False)
+claims_df.to_sql("claims", conn, if_exists="replace", index=False)
 
-# ---------------------------
-# Helper to run queries
-# ---------------------------
-def run_sql(query: str, params: tuple | None = None) -> pd.DataFrame:
-    try:
-        if params:
-            df = pd.read_sql_query(query, conn, params=params)
-        else:
-            df = pd.read_sql_query(query, conn)
-    except Exception as e:
-        st.error(f"SQL execution error:\n{e}")
-        return pd.DataFrame()
-    # Try to convert numeric-like columns to numeric types where sensible
-    for col in df.columns:
-        if df[col].dtype == object:
-            try:
-                df[col] = pd.to_numeric(df[col], errors="ignore")
-            except Exception:
-                pass
-    return df
+# -------------------------------
+# Queries
+# -------------------------------
+queries = {
+    "1. Total Providers by City":
+        """SELECT City, COUNT(*) AS total_providers
+           FROM providers
+           GROUP BY City
+           ORDER BY total_providers DESC;""",
 
-# ---------------------------
-# SQL queries (all 15)
-# ---------------------------
-QUERIES = {
-    "Query 1 — Providers by City": """
-SELECT City, COUNT(*) AS provider_count
-FROM providers
-GROUP BY City;
-""",
+    "2. Total Receivers by City":
+        """SELECT City, COUNT(*) AS total_receivers
+           FROM receivers
+           GROUP BY City
+           ORDER BY total_receivers DESC;""",
 
-    "Query 2 — Receivers by City": """
-SELECT City, COUNT(*) AS receiver_count
-FROM receivers
-GROUP BY City;
-""",
+    "3. Top Providers by Quantity Donated":
+        """SELECT p.Name, SUM(f.Quantity) AS total_quantity
+           FROM claims c
+           JOIN food_listings f ON c.Food_ID = f.Food_ID
+           JOIN providers p ON f.Provider_ID = p.Provider_ID
+           WHERE c.Status = 'Successful'
+           GROUP BY p.Name
+           ORDER BY total_quantity DESC;""",
 
-    "Query 3 — Provider Type (total donated quantity)": """
-SELECT Provider_Type, SUM(CAST(Quantity AS INTEGER)) AS total_quantity
-FROM food_listings
-GROUP BY Provider_Type
-ORDER BY total_quantity DESC;
-""",
+    "4. Contact Info of Top 5 Providers":
+        """SELECT p.Name, p.Contact, SUM(f.Quantity) AS total_quantity
+           FROM claims c
+           JOIN food_listings f ON c.Food_ID = f.Food_ID
+           JOIN providers p ON f.Provider_ID = p.Provider_ID
+           WHERE c.Status = 'Successful'
+           GROUP BY p.Name, p.Contact
+           ORDER BY total_quantity DESC
+           LIMIT 5;""",
 
-    # Query 4 (interactive) -- handled separately
+    "5. Top Receivers by Claims":
+        """SELECT r.Name, COUNT(c.Claim_ID) AS total_claims
+           FROM claims c
+           JOIN receivers r ON c.Receiver_ID = r.Receiver_ID
+           GROUP BY r.Name
+           ORDER BY total_claims DESC;""",
 
-    "Query 5 — Top 5 receivers by number of claims": """
-SELECT r.Name AS Receiver_Name,
-       COUNT(c.Claim_ID) AS Total_Claims
-FROM claims c
-JOIN receivers r ON c.Receiver_ID = r.Receiver_ID
-GROUP BY r.Name
-ORDER BY Total_Claims DESC
-LIMIT 5;
-""",
+    "6. Total Quantity Donated Overall":
+        """SELECT SUM(Quantity) AS total_quantity_donated
+           FROM food_listings;""",
 
-    "Query 6 — Total quantity available (all providers)": """
-SELECT SUM(CAST(Quantity AS INTEGER)) AS Total_Quantity_Available
-FROM food_listings;
-""",
+    "7. Most Common Food Types":
+        """SELECT Food_Type, COUNT(*) AS count
+           FROM food_listings
+           GROUP BY Food_Type
+           ORDER BY count DESC;""",
 
-    "Query 7 — City with highest number of listings (top 1)": """
-SELECT Location AS City,
-       COUNT(*) AS total_listings
-FROM food_listings
-GROUP BY Location
-ORDER BY total_listings DESC
-LIMIT 1;
-""",
+    "8. Claims Count per Food Item":
+        """SELECT f.Food_Name, COUNT(c.Claim_ID) AS claim_count
+           FROM claims c
+           JOIN food_listings f ON c.Food_ID = f.Food_ID
+           GROUP BY f.Food_Name
+           ORDER BY claim_count DESC;""",
 
-    "Query 8 — Food types by total quantity available": """
-SELECT COALESCE(Food_Type, 'Unknown') AS Food_Type,
-       SUM(COALESCE(CAST(Quantity AS INTEGER), 0)) AS total_quantity_available
-FROM food_listings
-GROUP BY Food_Type
-ORDER BY total_quantity_available DESC;
-""",
+    "9. Top Providers by Number of Claims":
+        """SELECT p.Name, COUNT(c.Claim_ID) AS claim_count
+           FROM claims c
+           JOIN food_listings f ON c.Food_ID = f.Food_ID
+           JOIN providers p ON f.Provider_ID = p.Provider_ID
+           GROUP BY p.Name
+           ORDER BY claim_count DESC;""",
 
-    "Query 9 — Number of claims per food item (by name)": """
-SELECT f.Food_Name,
-       COUNT(c.Claim_ID) AS total_claims
-FROM claims c
-JOIN food_listings f ON c.Food_ID = f.Food_ID
-GROUP BY f.Food_Name
-ORDER BY total_claims DESC;
-""",
+    "10. Claims Status Percentages":
+        """SELECT Status, COUNT(*) * 100.0 / (SELECT COUNT(*) FROM claims) AS percentage
+           FROM claims
+           GROUP BY Status;""",
 
-    "Query 10 — Provider with highest number of completed claims (top 1)": """
-SELECT p.Name AS Name,
-       COUNT(c.Claim_ID) AS successful_claims
-FROM claims c
-JOIN food_listings f ON c.Food_ID = f.Food_ID
-JOIN providers p ON f.Provider_ID = p.Provider_ID
-WHERE LOWER(c.Status) = 'completed'
-GROUP BY p.Name
-ORDER BY successful_claims DESC
-LIMIT 1;
-""",
+    "11. Average Quantity of Claimed Food":
+        """SELECT AVG(f.Quantity) AS avg_quantity
+           FROM claims c
+           JOIN food_listings f ON c.Food_ID = f.Food_ID
+           WHERE c.Status = 'Successful';""",
 
-    "Query 11 — Percentage of claims by status": """
-SELECT LOWER(Status) AS Status,
-       COUNT(*) AS total_claims,
-       ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM claims), 2) AS percentage
-FROM claims
-GROUP BY LOWER(Status);
-""",
+    "12. Most Claimed Meal Type":
+        """SELECT Meal_Type, COUNT(*) AS claim_count
+           FROM food_listings f
+           JOIN claims c ON f.Food_ID = c.Food_ID
+           WHERE c.Status = 'Successful'
+           GROUP BY Meal_Type
+           ORDER BY claim_count DESC;""",
 
-    "Query 12 — Average quantity of food claimed per receiver": """
-SELECT r.Name AS receiver_name,
-       ROUND(AVG(CAST(f.Quantity AS REAL)), 2) AS avg_quantity_claimed
-FROM claims c
-JOIN food_listings f ON c.Food_ID = f.Food_ID
-JOIN receivers r ON c.Receiver_ID = r.Receiver_ID
-GROUP BY r.Name
-ORDER BY avg_quantity_claimed DESC;
-""",
+    "13. Total Donated Quantity per Provider":
+        """SELECT p.Name, SUM(f.Quantity) AS total_quantity
+           FROM food_listings f
+           JOIN providers p ON f.Provider_ID = p.Provider_ID
+           GROUP BY p.Name
+           ORDER BY total_quantity DESC;""",
 
-    "Query 13 — Most claimed meal type (top 1)": """
-SELECT f.Meal_Type,
-       COUNT(c.Claim_ID) AS total_claims
-FROM claims c
-JOIN food_listings f ON c.Food_ID = f.Food_ID
-GROUP BY f.Meal_Type
-ORDER BY total_claims DESC
-LIMIT 1;
-""",
+    "14. Expiring Soon Food Items":
+        """SELECT Food_Name, Expiry_Date
+           FROM food_listings
+           WHERE date(Expiry_Date) <= date('now', '+2 day')
+           ORDER BY Expiry_Date ASC;""",
 
-    "Query 14 — Total quantity donated by each provider": """
-SELECT p.Name AS provider_name,
-       SUM(CAST(f.Quantity AS INTEGER)) AS total_quantity_donated
-FROM food_listings f
-JOIN providers p ON f.Provider_ID = p.Provider_ID
-GROUP BY p.Name
-ORDER BY total_quantity_donated DESC;
-""",
-
-    "Query 15 — City with highest total quantity claimed (completed only, top 1)": """
-SELECT r.City AS city,
-       SUM(CAST(f.Quantity AS INTEGER)) AS total_quantity_claimed
-FROM claims c
-JOIN food_listings f ON c.Food_ID = f.Food_ID
-JOIN receivers r ON c.Receiver_ID = r.Receiver_ID
-WHERE LOWER(c.Status) = 'completed'
-GROUP BY r.City
-ORDER BY total_quantity_claimed DESC
-LIMIT 1;
-"""
+    "15. City-wise Demand (Claims)":
+        """SELECT r.City, COUNT(c.Claim_ID) AS total_claims
+           FROM claims c
+           JOIN receivers r ON c.Receiver_ID = r.Receiver_ID
+           GROUP BY r.City
+           ORDER BY total_claims DESC;"""
 }
 
-# ---------------------------
-# Sidebar navigation
-# ---------------------------
-st.sidebar.header("Choose view")
-options = ["All queries (run in order)"] + ["Query 4 — Provider contacts in a city (interactive)"] + list(QUERIES.keys())
-selection = st.sidebar.selectbox("Select an option", options)
+# -------------------------------
+# Streamlit App UI
+# -------------------------------
+st.title("🍽 Local Food Wastage Management System")
 
-# small instructions
-st.sidebar.markdown("**Tips:**\n- Make sure `food_wastage.db` is in the same folder as this app.\n- For Query 4, type a city and press Run.")
+query_choice = st.selectbox("Select a Query to View Results", list(queries.keys()))
 
-# ---------------------------
-# Helper to display DataFrame and chart if numeric
-# ---------------------------
-def show_df_and_chart(df: pd.DataFrame, title: str = ""):
-    if df is None or df.empty:
-        st.info("No results to display.")
-        return
-    st.dataframe(df, use_container_width=True)
-    # If exactly two columns and second is numeric, show bar chart
-    if df.shape[1] == 2:
-        x_col = df.columns[0]
-        y_col = df.columns[1]
-        # ensure numeric y
-        try:
-            df[y_col] = pd.to_numeric(df[y_col], errors="coerce").fillna(0)
-            fig = px.bar(df, x=x_col, y=y_col, title=title or f"{y_col} by {x_col}", labels={x_col:x_col, y_col:y_col})
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception:
-            pass
+if query_choice:
+    df = pd.read_sql(queries[query_choice], conn)
+    st.dataframe(df)
 
-# ---------------------------
-# Execution: All queries or single
-# ---------------------------
-if selection == "All queries (run in order)":
-    st.header("All queries output")
-    # Query 4 param first
-    city = st.text_input("Type a city (for Query 4 - Provider contacts)", value="")
-    st.write("Running all queries. Scroll down to view results.")
-    # Iterate through queries in order, show Query 4 separately
-    # 1 & 2 are fine
-    # Show Query 1
-    st.subheader("1 — Providers by City")
-    df = run_sql(QUERIES["Query 1 — Providers by City"])
-    show_df_and_chart(df, "Providers by City")
+    if len(df.columns) >= 2 and df[df.columns[1]].dtype != "object":
+        fig = px.bar(df, x=df.columns[0], y=df.columns[1], title=query_choice)
+        st.plotly_chart(fig)
 
-    st.subheader("2 — Receivers by City")
-    df = run_sql(QUERIES["Query 2 — Receivers by City"])
-    show_df_and_chart(df, "Receivers by City")
+st.subheader("CRUD Operations")
 
-    st.subheader("3 — Provider Type (total quantity)")
-    df = run_sql(QUERIES["Query 3 — Provider Type (total donated quantity)"])
-    show_df_and_chart(df, "Provider Type Contribution")
+# Add Provider
+with st.expander("➕ Add Provider"):
+    with st.form("add_provider_form"):
+        name = st.text_input("Name")
+        ptype = st.text_input("Type")
+        address = st.text_input("Address")
+        city = st.text_input("City")
+        contact = st.text_input("Contact")
+        submitted = st.form_submit_button("Add")
+        if submitted:
+            conn.execute("INSERT INTO providers (Name, Type, Address, City, Contact) VALUES (?, ?, ?, ?, ?)",
+                         (name, ptype, address, city, contact))
+            conn.commit()
+            st.success("Provider Added Successfully!")
 
-    st.subheader("4 — Provider contacts in city")
-    if city.strip() == "":
-        st.info("Type a city above to view provider contacts for Query 4.")
-    else:
-        q4 = """
-SELECT Provider_ID, Name, Address, City, Contact
-FROM providers
-WHERE LOWER(City) = LOWER(?);
-"""
-        df = run_sql(q4, params=(city.strip(),))
-        show_df_and_chart(df, f"Providers in {city.strip()}")
+# Delete Provider
+with st.expander("🗑 Delete Provider"):
+    prov_id = st.number_input("Provider ID to Delete", min_value=1)
+    if st.button("Delete Provider"):
+        conn.execute("DELETE FROM providers WHERE Provider_ID = ?", (prov_id,))
+        conn.commit()
+        st.success("Provider Deleted Successfully!")
 
-    st.subheader("5 — Top 5 receivers by number of claims")
-    df = run_sql(QUERIES["Query 5 — Top 5 receivers by number of claims"])
-    show_df_and_chart(df, "Top receivers")
-
-    st.subheader("6 — Total quantity available (units)")
-    df = run_sql(QUERIES["Query 6 — Total quantity available (all providers)"])
-    # Show metric if single scalar
-    if not df.empty and df.columns[0] in df:
-        try:
-            total_val = int(df.iloc[0, 0]) if pd.notna(df.iloc[0,0]) else 0
-            st.metric("Total Quantity Available", f"{total_val}")
-        except Exception:
-            st.write(df)
-
-    st.subheader("7 — City with highest number of listings (top 1)")
-    df = run_sql(QUERIES["Query 7 — City with highest number of listings (top 1)"])
-    show_df_and_chart(df, "City with most listings")
-
-    st.subheader("8 — Food types by total quantity available")
-    df = run_sql(QUERIES["Query 8 — Food types by total quantity available"])
-    show_df_and_chart(df, "Food types by quantity")
-
-    st.subheader("9 — Claims per food item (by name)")
-    df = run_sql(QUERIES["Query 9 — Number of claims per food item (by name)"])
-    show_df_and_chart(df, "Claims per food item")
-
-    st.subheader("10 — Provider with highest number of completed claims (top 1)")
-    df = run_sql(QUERIES["Query 10 — Provider with highest number of completed claims (top 1)"])
-    show_df_and_chart(df, "Top provider (completed claims)")
-
-    st.subheader("11 — Percentage of claims by status")
-    df = run_sql(QUERIES["Query 11 — Percentage of claims by status"])
-    if not df.empty:
-        # show table and pie
-        st.dataframe(df, use_container_width=True)
-        try:
-            fig = px.pie(df, names=df.columns[0], values=df.columns[1], title="Claims status distribution")
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception:
-            pass
-
-    st.subheader("12 — Average quantity claimed per receiver")
-    df = run_sql(QUERIES["Query 12 — Average quantity of food claimed per receiver"])
-    show_df_and_chart(df, "Avg quantity per receiver")
-
-    st.subheader("13 — Most claimed meal type (top 1)")
-    df = run_sql(QUERIES["Query 13 — Most claimed meal type (top 1)"])
-    show_df_and_chart(df, "Most claimed meal type")
-
-    st.subheader("14 — Total quantity donated by each provider")
-    df = run_sql(QUERIES["Query 14 — Total quantity donated by each provider"])
-    show_df_and_chart(df, "Total donated by provider")
-
-    st.subheader("15 — City with highest total quantity claimed (completed only)")
-    df = run_sql(QUERIES["Query 15 — City with highest total quantity claimed (completed only, top 1)"])
-    show_df_and_chart(df, "City with highest total claimed quantity")
-
-elif selection == "Query 4 — Provider contacts in a city (interactive)":
-    st.header("Query 4 — Provider contact information in a specific city")
-    city_input = st.text_input("Enter city name (example: Jaipur)", value="")
-    if st.button("Run Query 4"):
-        if city_input.strip() == "":
-            st.warning("Please type a city name then press Run.")
-        else:
-            q4 = """
-SELECT Provider_ID, Name, Address, City, Contact
-FROM providers
-WHERE LOWER(City) = LOWER(?);
-"""
-            df = run_sql(q4, params=(city_input.strip(),))
-            show_df_and_chart(df, f"Providers in {city_input.strip()}")
-
-else:
-    # Single-query view for any of the named queries
-    st.header(selection)
-    sql_text = QUERIES.get(selection)
-    if sql_text is None:
-        st.error("Query not found.")
-    else:
-        if st.button("Run"):
-            df = run_sql(sql_text)
-            show_df_and_chart(df, selection)
-
-st.markdown("---")
-st.caption("Built with ❤️ — Local Food Wastage Management System")
-
+# Update Provider
+with st.expander("✏ Update Provider Contact"):
+    prov_id_u = st.number_input("Provider ID to Update", min_value=1)
+    new_contact = st.text_input("New Contact")
+    if st.button("Update Contact"):
+        conn.execute("UPDATE providers SET Contact = ? WHERE Provider_ID = ?", (new_contact, prov_id_u))
+        conn.commit()
+        st.success("Contact Updated Successfully!")
