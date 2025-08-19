@@ -174,7 +174,7 @@ queries = {
 # -------------------------------
 # Streamlit App UI
 # -------------------------------
-st.title("🍽 Local Food Wastage Management System")
+st.title("🥑 Local Food Wastage Management System")
 
 
 providers_count = len(providers_df)
@@ -338,6 +338,7 @@ elif contact_type == "Receiver":
             f"[📞 Call {selected_receiver}](tel:{receiver_phone})",
             unsafe_allow_html=True
         )
+
 
 
 
