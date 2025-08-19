@@ -11,7 +11,7 @@ cursor = conn.cursor()
 # Set page config (this controls layout and initial look)
 st.set_page_config(
     page_title="Food Wastage Management System",
-    page_icon="🍽️",
+    page_icon="🥑",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -338,6 +338,7 @@ elif contact_type == "Receiver":
             f"[📞 Call {selected_receiver}](tel:{receiver_phone})",
             unsafe_allow_html=True
         )
+
 
 
 
